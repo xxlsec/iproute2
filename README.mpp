@@ -1,0 +1,26 @@
+This is the complementary documentation on how the MACSEC keying is reached
+using the XXLSec MPP protocol. Using the protocol, one can achieve key agreement
+between multiple entities (thus MultiParty Protocol) with considerable effort 
+made to guarantee privacy, authenticity and forensic security of entities in it.
+
+Current version of the protocol entails manual initial key creation between 
+the entities, but future versions will support separate enrollment & revocation.
+This is why Sqlite is needed, so that at the end of the protocol, one can read
+the keys between other entities and their mac addresses.
+
+Usage of the command line is quite simple, although only keying is achieved:
+
+ip macsec mpp <network_interface>
+
+Rest of the interface address addition and link setup needs to be done manually.
+Separate tools exist for MPP runtime configuration with the network interface
+and keying so that the protocol spreads the keys between multiple hosts.
+
+Otherwise, existing functionality within iproute2 is used to install the keys
+using an automated process which is part of this implementation. Actual keys
+are read from the MPP database, along with mac addresses of other entities which
+are resolved with MPP.
+
+Other options for MACSEC are not supported right now but this exists as an 
+enticing proof of concept about the current MPP protocol implementation generation
+for sharing the MACSEC keys in a remote and efficient manner.

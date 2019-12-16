@@ -1,4 +1,10 @@
-This is a set of utilities for Linux networking.
+This is a set of utilities for Linux networking. Along with XXLSEC MPP protocol
+changes to achieve MACSEC keying through it. MPP is a XLLSEC proprietary
+protocol for which MACSEC keying is one of the use cases.
+
+Please consult README.mpp for further details.
+
+Rudimentary extra dependencies include sqlite3.
 
 Information:
     https://wiki.linuxfoundation.org/networking/iproute2

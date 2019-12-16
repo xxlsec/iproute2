@@ -7,6 +7,7 @@
  *		2 of the License, or (at your option) any later version.
  *
  * Authors:	Sabrina Dubroca <sd@queasysnail.net>
+ * Authors:	XXLSec Ltd <info@xxlsec.com>
  */
 
 #include <stdio.h>
@@ -16,13 +17,16 @@
 #include <linux/genetlink.h>
 #include <linux/if_ether.h>
 #include <linux/if_macsec.h>
-
+#include <time.h>
 #include "rt_names.h"
 #include "utils.h"
 #include "ip_common.h"
 #include "ll_map.h"
 #include "libgenl.h"
-
+#include "mpp_db.h"
+#include <uuid/uuid.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 static const char * const values_on_off[] = { "off", "on" };
 
 static const char * const validate_str[] = {
@@ -82,7 +86,8 @@ static int genl_family = -1;
 static void ipmacsec_usage(void)
 {
 	fprintf(stderr,
-		"Usage: ip macsec add DEV tx sa { 0..3 } [ OPTS ] key ID KEY\n"
+        "Usage: ip macsec mpp DEV\n"
+        "       ip macsec add DEV tx sa { 0..3 } [ OPTS ] key ID KEY\n"
 		"       ip macsec set DEV tx sa { 0..3 } [ OPTS ]\n"
 		"       ip macsec del DEV tx sa { 0..3 }\n"
 		"       ip macsec add DEV rx SCI [ on | off ]\n"
@@ -1048,6 +1053,138 @@ static int do_show(int argc, char **argv)
 	return -1;
 }
 
+#define MACSEC_RX_ARGS 14
+#define MACSEC_TX_ARGS 10
+#define TX_STR_LEN 32
+#define MAC_ADDR_LEN 17
+
+static int fimport(unsigned char *buf, unsigned buflen)
+{
+    const char *path = "/dev/urandom";
+    unsigned rem = buflen, copied = 0;
+    ssize_t ret;
+    int fd;
+
+    fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        printf("Unable to open input file %s\n", path);
+        return -1;
+    }
+
+    while (rem) {
+        ret = (int)read(fd, buf + copied, rem);
+        if (ret <= 0) {
+            break;
+        } else {
+            rem -= (unsigned)ret;
+            copied += (unsigned)ret;
+        }
+    }
+
+    close(fd);
+
+    return (copied == buflen) ? 0 : -1;
+}
+
+void random_key_index(char* key_idx_str) {
+    unsigned char* randbuf = calloc(4, sizeof(unsigned char*));
+    fimport(randbuf, 4);
+    for (int i = 0; i < 3; i++)
+        sprintf(key_idx_str+i,"%02x", randbuf[i]);
+    free(randbuf);
+}
+/* Get single field from payload ('nick_name') from peers table
+ * See defines in mpp_db.h for field index
+ */
+int db_getpeerspayloadfield(int index, char* input, char* fielddata)
+{
+    char payloadbuffer[1024];
+    char arrayelements[10][1024];
+    strncpy(payloadbuffer, input, 1024);
+    char* token = strtok(payloadbuffer, ",");
+    int n=0;
+    while (token != NULL) {
+        strcpy(arrayelements[n++], token);
+        token = strtok(NULL, ",");
+    }
+    for (int i=0; i < n; i++)
+    {
+        //fprintf(stderr,"%s ",arrayelements[i]);
+        if ( i == index )
+            //fprintf(stderr, "<- found ");
+            sprintf(fielddata,"%s", arrayelements[i]);
+    }
+    //fprintf(stderr,"\n");
+    return 0;
+}
+
+int peer_mac_callback(void* p,int argc,char** argv,char** acColName) {
+    if (strlen(argv[0]) > 0) {
+        char* key = calloc(MACSEC_MAX_KEY_LEN*2,sizeof(char*));
+        char* key_idx_str = calloc(TX_STR_LEN,sizeof(char*));
+        random_key_index(key_idx_str);
+        char* peermac = calloc(MAC_ADDR_LEN, sizeof(char*));
+        char* secmac = calloc(MAC_ADDR_LEN, sizeof(char*));
+        char* mactmp = calloc(1024, sizeof(char*)), *keytmp = calloc(1024, sizeof(char*));
+        strncpy(mactmp, argv[0], 1024);
+        strncpy(keytmp, argv[0], 1024);
+        //fprintf(stderr, "%s\n%s\n%s\n",argv[0],mactmp,keytmp);
+        db_getpeerspayloadfield(MACADDR,mactmp,peermac);
+        db_getpeerspayloadfield(MACSECKEY,keytmp,key);
+        fprintf(stderr, "%s\n",peermac);
+        strcpy(secmac,peermac);
+        char* rxcreate[] = {"macsec0",
+                           "rx",
+                           "address",
+                           peermac,
+                            "port",
+                            "1"};
+        do_modify(CMD_ADD, 6, rxcreate);
+        char* rxargs[] = {"macsec0",
+                          "rx",
+                          "port",
+                          "1",
+                          "address",
+                          secmac,
+                          "sa",
+                          "0",
+                          "pn",
+                          "1",
+                          "on",
+                          "key",
+                          key_idx_str,
+                          key};
+        do_modify(CMD_ADD, MACSEC_RX_ARGS, rxargs);
+    }
+    return 0;
+}
+
+static bool get_mpp_keying(int argc, char**argv)
+{
+    char *key_tx_idx_str = calloc(TX_STR_LEN,sizeof(char*));
+    char *txkey = calloc(MACSEC_MAX_KEY_LEN,sizeof(char*));
+    char *delargs[] = {"delete", "link", argv[0], "macsec0"};
+    do_iplink(4,delargs);
+    char* createargs[] = {"add", "link", argv[0], "macsec0", "type", "macsec", "encrypt", "on"};
+    do_iplink(8, createargs);
+    getpayloadfield(MACSECKEY,txkey);
+    random_key_index(key_tx_idx_str);
+    char* txargs[] = {"macsec0",
+                      "tx",
+                      "sa",
+                      "0",
+                      "pn",
+                      "1",
+                      "on",
+                      "key",
+                      key_tx_idx_str,
+                      txkey};
+    do_modify(CMD_ADD, MACSEC_TX_ARGS, txargs);
+    showconstellation(peer_mac_callback);
+    return true;
+}
+
+
 int do_ipmacsec(int argc, char **argv)
 {
 	if (argc < 1)
@@ -1059,9 +1196,12 @@ int do_ipmacsec(int argc, char **argv)
 	if (genl_init_handle(&genl_rth, MACSEC_GENL_NAME, &genl_family))
 		exit(1);
 
-	if (matches(*argv, "show") == 0)
+    if (matches(*argv, "show") == 0) {
 		return do_show(argc-1, argv+1);
-
+    }
+    if (matches(*argv, "mpp") == 0) {
+        return get_mpp_keying(argc-1,argv+1);
+    }
 	if (matches(*argv, "add") == 0)
 		return do_modify(CMD_ADD, argc-1, argv+1);
 	if (matches(*argv, "set") == 0)
@@ -1177,7 +1317,8 @@ static bool check_txsc_flags(bool es, bool scb, bool sci)
 static void usage(FILE *f)
 {
 	fprintf(f,
-		"Usage: ... macsec [ [ address <lladdr> ] port { 1..2^16-1 } | sci <u64> ]\n"
+        "Usage: ... macsec [mpp] \n"
+        "                  [ [ address <lladdr> ] port { 1..2^16-1 } | sci <u64> ]\n"
 		"                  [ cipher { default | gcm-aes-128 | gcm-aes-256 } ]\n"
 		"                  [ icvlen { 8..16 } ]\n"
 		"                  [ encrypt { on | off } ]\n"
@@ -1199,7 +1340,7 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u32 window = -1;
 	struct cipher_args cipher = {0};
 	enum macsec_validation_type validate;
-	bool es = false, scb = false, send_sci = false;
+    bool es = false, scb = false, send_sci = false, mpp = false;
 	int replay_protect = -1;
 	struct sci sci = { 0 };
 
@@ -1318,7 +1459,10 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 			ret = get_an(&encoding_sa, *argv);
 			if (ret)
 				invarg("expected an { 0..3 }", *argv);
-		} else {
+        } else if (strcmp(*argv, "mpp") == 0) {
+            mpp = true;
+        }
+        else {
 			fprintf(stderr, "macsec: unknown command \"%s\"?\n",
 				*argv);
 			usage(stderr);
@@ -1327,7 +1471,9 @@ static int macsec_parse_opt(struct link_util *lu, int argc, char **argv,
 
 		argv++; argc--;
 	}
-
+    if (mpp) {
+        return get_mpp_keying(argc,argv);
+    }
 	if (!check_txsc_flags(es, scb, send_sci)) {
 		fprintf(stderr,
 			"invalid combination of send_sci/end_station/scb\n");
