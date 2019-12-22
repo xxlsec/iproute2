@@ -1,5 +1,5 @@
 This is a set of utilities for Linux networking. Along with XXLSEC MPP protocol
-changes to achieve MACSEC keying through it. MPP is a XLLSEC proprietary
+changes to achieve MACSEC keying through it. MPP is a XXLSEC proprietary
 protocol for which MACSEC keying is one of the use cases.
 
 Please consult README.mpp for further details.
